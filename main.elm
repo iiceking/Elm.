@@ -2,20 +2,23 @@ module Main exposing (..)
 
 import Browser
 import Html exposing (..)
+import Html.Attributes exposing (value, placeholder)
+import Html.Events exposing (onInput, onClick)
 import Http
 import Random
-import List
-import Html.Attributes exposing (type_, placeholder, value, style)
-import Html.Events exposing (onInput, onClick)
-import Json.Decode exposing (list, string, Decoder, field)
+import Json.Decode exposing (Decoder, field, string, list, at)
 
 -- MODEL
 
 type Model
     = Loading
-    | Ready (List String)
-    | ShowWord String (List String)
+    | Ready (List String) String
+    | ShowDefinitions String (List String) String
     | Error String
+    | Guessing String String (List String) -- Added for guessing
+
+type alias Definition =
+    { definition : String }
 
 init : () -> (Model, Cmd Msg)
 init _ =
@@ -30,6 +33,8 @@ type Msg
     = GotText (Result Http.Error String)
     | ShowDefinitions (Result Http.Error (List String))
     | PickWord
+    | InputGuess String
+    | SubmitGuess
 
 -- UPDATE
 
@@ -38,16 +43,16 @@ update msg model =
     case msg of
         GotText (Ok text) ->
             let
-                words = List.filter (\w -> String.length w > 0) (String.split "\n" text)
+                words = List.filter (\w -> String.length w > 0) (String.split " " text)
             in
-            ( Ready words, Cmd.none )
+            ( Ready words "", Cmd.none )
 
         GotText (Err error) ->
             ( Error (Http.errorToString error), Cmd.none )
 
         PickWord ->
             case model of
-                Ready words ->
+                Ready words _ ->
                     let
                         pickRandomWord = Random.generate (\word -> ShowDefinitions (Ok [word])) (Random.element words)
                     in
@@ -63,21 +68,48 @@ update msg model =
                     , expect = Http.expectJson (decodeDefs word) definitionsDecoder
                     }
             in
-            ( model, fetchDefs )
+            ( Loading, fetchDefs )
 
         ShowDefinitions (Err error) ->
             ( Error (Http.errorToString error), Cmd.none )
 
         ShowDefinitions (Ok defs) ->
-            ( ShowWord word defs, Cmd.none )
+            case model of
+                Ready _ _ ->
+                    ( Guessing word "" defs, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        InputGuess guess ->
+            case model of
+                Guessing word _ defs ->
+                    ( Guessing word guess defs, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SubmitGuess ->
+            case model of
+                Guessing word guess defs ->
+                    if guess == word then
+                        ( Ready [], Cmd.none ) -- Correct Guess, Reset or Show Success Message
+                    else
+                        ( Guessing word guess defs, Cmd.none ) -- Incorrect Guess, Try Again
+
+                _ ->
+                    ( model, Cmd.none )
+
+-- DECODERS
 
 definitionsDecoder : Decoder (List String)
 definitionsDecoder =
-    list (field "definition" string)
+    at ["meanings"] (list (at ["definitions"] (list (field "definition" string))))
 
 decodeDefs : String -> Decoder Msg
 decodeDefs word =
-    field "meanings" (list (field "definitions" (list (field "definition" string)))) |> Json.Decode.map (\defs -> ShowDefinitions (Ok defs))
+    definitionsDecoder
+        |> Json.Decode.map (\defs -> ShowDefinitions (Ok defs))
 
 -- VIEW
 
@@ -87,13 +119,17 @@ view model =
         Loading ->
             text "Loading..."
 
-        Ready _ ->
-            button [ onClick PickWord ] [ text "Pick a Word" ]
-
-        ShowWord word defs ->
+        Ready _ _ ->
             div []
-                [ h3 [] [ text ("Word: " ++ word) ]
+                [ button [ onClick PickWord ] [ text "Pick a Word" ]
+                ]
+
+        Guessing word guess defs ->
+            div []
+                [ h3 [] [ text "Definitions" ]
                 , ul [] (List.map (\def -> li [] [ text def ]) defs)
+                , input [ placeholder "Enter your guess", onInput InputGuess, value guess ] []
+                , button [ onClick SubmitGuess ] [ text "Submit Guess" ]
                 ]
 
         Error errorMessage ->
@@ -109,9 +145,3 @@ main =
         , subscriptions = \_ -> Sub.none
         , view = view
         }
-
--- SUBSCRIPTIONS
-
-subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
