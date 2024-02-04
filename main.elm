@@ -13,8 +13,7 @@ import Json.Decode exposing (Decoder, field, string, list, at)
 type Model
     = Loading
     | Ready (List String) String
-    | FetchWord (Result Http.Error (List String))
-    | DisplayGuess String (List String) String -- Renamed for clarity
+    | ShowDefinitions String (List String) String
     | Error String
     | Guessing String String (List String) -- Added for guessing
 
@@ -32,8 +31,7 @@ init _ =
 
 type Msg
     = GotText (Result Http.Error String)
-    | FetchWord (Result Http.Error (List String))
-    | DisplayGuess String (List String)
+    | ShowDefinitions (Result Http.Error (List String))
     | PickWord
     | InputGuess String
     | SubmitGuess
@@ -56,14 +54,14 @@ update msg model =
             case model of
                 Ready words _ ->
                     let
-                        pickRandomWord = Random.generate (\word -> FetchWord (Ok [word])) (Random.element words)
+                        pickRandomWord = Random.generate (\word -> ShowDefinitions (Ok [word])) (Random.element words)
                     in
                     ( model, pickRandomWord )
 
                 _ ->
                     ( model, Cmd.none )
 
-        FetchWord (Ok [word]) ->
+        ShowDefinitions (Ok [word]) ->
             let
                 fetchDefs = Http.get
                     { url = "https://api.dictionaryapi.dev/api/v2/entries/en/" ++ word
@@ -72,27 +70,32 @@ update msg model =
             in
             ( Loading, fetchDefs )
 
-        FetchWord (Err error) ->
+        ShowDefinitions (Err error) ->
             ( Error (Http.errorToString error), Cmd.none )
 
-        DisplayGuess word defs ->
-            ( DisplayGuess word defs "", Cmd.none )
+        ShowDefinitions (Ok defs) ->
+            case model of
+                Ready _ _ ->
+                    ( Guessing word "" defs, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         InputGuess guess ->
             case model of
-                DisplayGuess word _ defs ->
-                    ( DisplayGuess word guess defs, Cmd.none )
+                Guessing word _ defs ->
+                    ( Guessing word guess defs, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
 
         SubmitGuess ->
             case model of
-                DisplayGuess word guess defs ->
+                Guessing word guess defs ->
                     if guess == word then
                         ( Ready [], Cmd.none ) -- Correct Guess, Reset or Show Success Message
                     else
-                        ( DisplayGuess word guess defs, Cmd.none ) -- Incorrect Guess, Try Again
+                        ( Guessing word guess defs, Cmd.none ) -- Incorrect Guess, Try Again
 
                 _ ->
                     ( model, Cmd.none )
@@ -106,7 +109,7 @@ definitionsDecoder =
 decodeDefs : String -> Decoder Msg
 decodeDefs word =
     definitionsDecoder
-        |> Json.Decode.map (\defs -> DisplayGuess word defs)
+        |> Json.Decode.map (\defs -> ShowDefinitions (Ok defs))
 
 -- VIEW
 
@@ -121,7 +124,7 @@ view model =
                 [ button [ onClick PickWord ] [ text "Pick a Word" ]
                 ]
 
-        DisplayGuess word guess defs ->
+        Guessing word guess defs ->
             div []
                 [ h3 [] [ text "Definitions" ]
                 , ul [] (List.map (\def -> li [] [ text def ]) defs)
